@@ -1,0 +1,15 @@
+{
+  "outputStyle": "pa-speak",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Remember pa-speak: plain words, short sentences, lead with the answer, no code talk.'"
+          }
+        ]
+      }
+    ]
+  }
+}

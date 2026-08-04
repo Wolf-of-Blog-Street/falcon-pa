@@ -1,0 +1,5 @@
+#!/bin/sh
+# brain — the one way to run the memory engine. Sets BRAIN_ROOT (this repo,
+# independent of cwd) and NODE_NO_WARNINGS. Exit code passes through (exec).
+dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+BRAIN_ROOT="$dir" NODE_NO_WARNINGS=1 exec node "$dir/src/brain/brain.mjs" "$@"

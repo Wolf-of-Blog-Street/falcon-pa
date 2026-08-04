@@ -1,0 +1,7 @@
+{
+  "schema_lock": true,
+  "timezone": "Europe/Lisbon",
+  "disabled_entities": ["memory", "lesson", "working-memory"],
+  "votes": false,
+  "who_created": false
+}
