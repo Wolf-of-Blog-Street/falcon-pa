@@ -1,4 +1,76 @@
 # falcon-pa
+## The README by Tom Belfort
+
+First, I want to say. This is not "vibe coded slop". It is coded by agents, but I have spent months on this. Testing, tweaking and stress testing. I have spent so much time on this it's verging on stupid. 
+
+I spent $300 to generate a brain filled with 500,000 entries representing business/personal life, then generated 100's of questions to stress test it.
+
+It works well.
+
+## What is Falcon-PA (Non Technical)
+
+It's a brain that lets you store every part of your personal and business life in a way that any agent in codex or claude code can have access to.
+
+You can think of it like a real PA. 
+
+You just talk to it. 
+
+"I have a meeting next Tuesday at 2pm with Jim Bob about the Avron Project"
+
+If you ask that, most agents are going to create an event and record the info.
+
+They won't bloat and create the project or person. Why? Because it doesn't make sense to create cards every time something is mentioned. 
+
+If we follow up with "Jim Bob is the client for the Avron project"
+
+It creates a person Jim Bob, and a project Avron Project, and relates both to the event, and the person/project to each other as "client for" relationship.
+
+So now if you ask "Who is Jim Bob?" in a fresh context.
+
+It says
+
+"Jim bob is the client for the Avron Project."
+
+## What is Falcon-PA (Technical)
+
+Every form of memory for agents overcomplicates. They all use embeddings.
+
+Embeddings suck for this. 
+
+They work fantastically for small memory, but remember when I said I tried the 500k stress-test? Well.. I built embedding-based memory, and did the same thing. It doesn't work at scale. 
+
+At least, not reliably enough for your business PA.
+
+So this is how I solved the problem..
+
+And I solved it. Not claude. Claude just implemented it and made it work in a timeframe much faster than I could.
+
+We have 2 parts:
+
+brain/__source which contains the mds. 1 card = 1 md
+
+Now.. The reason we want mds is that agents are good at natively reading/writing to them. You break them if you try to mess around with embeddings or other things.
+
+They just don't work as well. They become slow, weird. Awful to use. Keep them in their native environment and they are a joy to use.
+
+An sqlite db modelled as a graph.
+
+This means that READ/WRITE/EDIT - mds
+SEARCH - sqlite
+
+Then the sqlite is indexed to keep it in sync:
+
+per-write, incremental
+session start
+a heal - Deals with issues like no index file, no tables, corruption and other things. This was the result of extensive stress-testing and bug fixing. 
+
+## I wasn't entirely truth. It's more than just this!
+
+What I described above is just 'the brain' or 'the memory'. It's the part that makes everything work, but Falcon PA is a collection of things that enable Claude Code or Codex to run your life/business, do research, send email, manage your calendar or pretty much anything you want.
+
+But first, before we go into that. I need to teach you the core philosophy of the brain.
+
+## The README by Claude
 
 A business personal assistant with a brain. You talk to it in plain language; it
 remembers your world — people, companies, meetings, obligations — and picks up where
