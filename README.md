@@ -47,8 +47,6 @@ Naturally — but with the four kinds in mind. Examples of a normal day:
   history — from memory, not from search.
 - *"I prefer short calls before noon."* → Saved as a preference; it shapes plans
   from now on.
-- *"New rule: never email clients directly — draft for my review."* → A standing
-  order. It binds every session until you cancel it.
 - *"Where were we?"* (new session) → It reads your focus and continues.
 
 Useful habits:
@@ -76,23 +74,6 @@ point at it.
 - When it ends, it closes — and the whole history stays: every meeting, every
   decision, every done action, still connected, still askable years later
   (*"how did we run the Acme rollout?"*).
-
-## Standing orders — your rules
-
-A **standing order** is a rule you issue once and the PA obeys until you cancel it.
-Orders BIND; preferences guide. The PA re-reads every live order at the start of
-every session — they are always in force, never "forgotten".
-
-- Issue one in plain words: *"New rule: never spend money without my OK."*
-  *"Never email clients directly — always draft for my review."*
-  *"Anything legal goes to Sara first."*
-- Scope them: a global rule lives on the base `pa` desk; a desk rule binds one world
-  (*"in bookkeeping: no invoice goes out without my sign-off"*).
-- Cancel explicitly: *"Cancel the no-direct-email rule."* The order is marked
-  rescinded and skipped from then on — the record of it stays, so you can always ask
-  *"what rules have I cancelled?"*
-- Conflicts: an order always beats a preference. If two orders collide, the PA stops
-  and asks you instead of choosing.
 
 ## Focus, contexts, and abilities — how you build real roles
 
@@ -196,9 +177,7 @@ hook. That is the whole setup.
   transcripts.
 - **The four futures** — actions, decisions, obligations, events (see above). The
   due list, the "what's next", the recurring cycles.
-- **Standing orders** — your rules. Read at the start of every session, binding
-  until you cancel them.
-- **Preferences** — your tastes, with who-said-it noted. They guide; orders bind.
+- **Preferences** — your tastes, with who-said-it noted.
 - **You** — a me card that learns what is important to you, what you like and
   dislike, and how you work. Short, budgeted, self-pruning. Never health, never
   private-life material — it omits or asks.
