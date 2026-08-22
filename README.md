@@ -64,11 +64,39 @@ per-write, incremental
 session start
 a heal - Deals with issues like no index file, no tables, corruption and other things. This was the result of extensive stress-testing and bug fixing. 
 
-## I wasn't entirely truth. It's more than just this!
+## I wasn't entirely truthful. It's more than just this!
 
 What I described above is just 'the brain' or 'the memory'. It's the part that makes everything work, but Falcon PA is a collection of things that enable Claude Code or Codex to run your life/business, do research, send email, manage your calendar or pretty much anything you want.
 
 But first, before we go into that. I need to teach you the core philosophy of the brain.
+
+Even though the agent will mostly understand, it helps if you know the structure and can ask it to do specific things. 
+
+It'll take you 5 minutes to understand though. It's very simple.
+
+## Everything is a card
+
+Everything is a card and a relation. 
+
+Think of it like a physical piece of paper, and you draw a line to other pieces of paper with a verb and a why. Your agent will decide the verb/why. You don't have to worry about that.
+
+I came up with a way to manage your life/business that is very organised.
+
+I split the cards up into 3 types: Future, Present, Past. 
+
+I call them:
+
+- Futures: Happens in the future. It's a card, but it represents something in the future.
+- Card: Present. Just a thing with no time. Information.
+- Records: The past. It's a card, but it represents something that happens.
+
+Futures have 4 types:
+
+Events, actions, obligations and decisions.
+
+This captures your WHOLE LIFE.
+
+Events = Every sort of meeting. Phone call, live meeting, large event, a date with your husband or wife. Anything. These automatically go in
 
 ## The README by Claude
 
