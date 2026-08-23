@@ -26,7 +26,9 @@ silences Node's warnings for you — never compose the raw node invocation yours
 NEVER pipe brain output through grep/filters to "clean" it: a pipe hides the
 exit code and a filter can delete real data lines. The wrapper already
 silences the only noise.
-Engine release: falcon-brain **v2.0.1** (`src/brain/VERSION`).
+Engine release: falcon-brain **v4.0.0** (`src/brain/VERSION`). Skills are brain
+nodes; the `SKILL.md` files under `.claude/skills/` and `.agents/skills/` are
+derived copies — edit the node, never the copies.
 
 ## Your brain (memory — use it every session)
 

@@ -316,8 +316,9 @@ hook. That is the whole setup.
 - **Teaching:** `CLAUDE.md` (Claude Code) and `AGENTS.md` (Codex) carry the PA role,
   the first-run install, the session-start ritual, and the memory discipline.
   `config/pa-speak.md` is the plain-speech output style the setup installs.
-- **Hooks:** `.claude/settings.json` + `bin/session-start.mjs` print your focus at
-  every session start (cross-platform Node, no shell tricks).
+- **Hooks:** `.claude/settings.json` + the vendored `src/brain/hooks/` pair: the
+  session-start hook syncs first, then prints your focus; the edit hooks keep the
+  brain index and derived skill files true on every write (cross-platform Node).
 
 ## Privacy (hard line)
 
