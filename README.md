@@ -96,7 +96,25 @@ Events, actions, obligations and decisions.
 
 This captures your WHOLE LIFE.
 
-Events = Every sort of meeting. Phone call, live meeting, large event, a date with your husband or wife. Anything. These automatically go in
+Events = Every sort of meeting. Phone call, live meeting, large event, a date with your husband or wife. Anything. If you have a calendar tool setup in the tools/(See below) it will generally add it, but I'm going to add a feature so you can trigger any action on any type of card read/write/edit to further integration into your tool ecosystem. I just don't slap it on because I don't vibe code. I do things carefully, systematically and with rigorous testing before I deploy a release.)
+
+Actions = Tasks. I choose to call them 'action' because it's more positive. Rather than a task you have to do, you have an action you WILL take with a date. It's a subtle psychological shift. A task is a thing you need to do to check off a list. An action is a thing you you will do. 
+
+Decisions = Just a way to offload things in your life. Decisions you have to make. They aren't tasks/actions. They aren't meetings. They're things to decide. 
+
+Obligations = Things like, file your taxes, send a report to a client. I choose to separate these, because, you might want to add a report due to a client, but then add a separation action to do it. The obligation just lets you know what NEEDS to be done. The action is you deciding how and when it'll be done. Filing your tax return by x Oct is an obligation. An action is "Complete my tax return by 30 Sep". You can complete it, but not file it, so it's better to separate actions and obligations. 
+
+
+That's it. 
+
+So when you're talking to your PA, you can say "add an obligation, decision, action or event". You don't HAVE to. It can work out. But.. It's better to just be explicit. Models aren't flawless and they will sometimes make mistakes if you expect them to assume the right things all the time.
+
+But in general, if you say something like "I need to file my taxes for company Y by the 15th Oct, it will setup an obligation and link it to the company."
+
+## Card Types
+
+
+
 
 ## The README by Claude
 
