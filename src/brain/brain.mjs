@@ -146,9 +146,11 @@ const REGISTRY = {
     ]) },
     skill:        { tenses: ['card'], profile: profile([
       ['name', 'text'],
+      ['file', 'text'], // v3 projection legacy — kept registered so pre-materialization cards still lint; adoption removes it
       ['cadence', 'text'],
       ['last_verified', 'date'],
       ['system', 'ref', { entities: ['system'] }], // R1
+      ['frontmatter', 'list'], // skill-materialization: extra host SKILL.md frontmatter lines (license, allowed-tools, …), re-emitted verbatim on materialize
     ]) },
     context:      { tenses: ['card'], profile: profile([
       ['name', 'text'],      // "Wolf Network", "Falcon Brain"
@@ -3319,7 +3321,12 @@ function unknownFlagMessage(cmd, unknown, known, kind) {
   const hint = richer
     ? ` — 'new' is a skeleton-writer; profile/relations/body/updated go through 'apply' (richer creation, one transaction)`
     : ` — known flags for '${cmd}': ${known.length ? known.map(f => '--' + f).join(', ') : '(none beyond --root/--help)'}`;
-  return `unknown flag${unknown.length > 1 ? 's' : ''} for '${cmd}': ${unknown.map(f => '--' + f).join(', ')}${hint}`;
+  // brain-teaching §1.2: the observed miss was `forget --why` — the refusal itself teaches
+  // the reasoned removal paths instead of leaving the caller to guess another flag.
+  const teach = cmd === 'forget' && unknown.includes('why')
+    ? `\n  forget takes no reason — to record WHY something leaves, use status-drop (set --field status --to dropped) or supersede; forget is for things that should not exist at all.`
+    : '';
+  return `unknown flag${unknown.length > 1 ? 's' : ''} for '${cmd}': ${unknown.map(f => '--' + f).join(', ')}${hint}${teach}`;
 }
 
 function checkFlags(cmd, flags, verbFlags, kind = 'write') {
@@ -6092,16 +6099,21 @@ function row(r) {
   return bits.join('  ');
 }
 
+function pointerRow(root, r) {
+  const source = path.resolve(nodePath(root, r.slug));
+  return `${r.slug}\t${r.entity ?? ''}\t${source}\tRead this file with your file tool.`;
+}
+
 function tsvCell(v) { return String(v ?? '').replace(/[\t\r\n]+/g, ' '); }
 
 function shownSuffix(total, shown, hint) {
   return `total ${total}, shown ${shown}${hint ? ` (${hint})` : ''}`;
 }
 
-function printRows(rows, label, total, hint, out) {
+function printRows(root, rows, label, total, hint, out) {
   total = total ?? rows.length;
   out(`${label}: ${shownSuffix(total, rows.length, hint)}`);
-  rows.forEach(r => out('  ' + row(r)));
+  rows.forEach(r => out(pointerRow(root, r)));
   if (!rows.length) out('  (0 results)');
 }
 
@@ -6429,6 +6441,13 @@ function cmdGet(ctx, slugs, flags) {
         out(multi ? `${slug}\t${tsvCell(val)}` : val);
         continue;
       }
+      if (!flags.body) {
+        const current = readSourceFileOrDie(root, slug);
+        if (hasConflictMarkers(conflictRegion(current)))
+          die(`'${slug}' carries unmerged conflict markers — unresolved VCS conflict requires repair; refusing rendered get pointer to unresolved truth. Inspect exact bytes: brain get ${slug} --raw; resolve the source conflict, then: brain sync --slug ${slug}`);
+        out(pointerRow(root, r));
+        continue;
+      }
       // C-9: --raw is the MACHINE channel — the exact source bytes, ZERO diagnostics
       // (no collision warning, no hash line, no body-size hint). The eval readback and
       // any script consume this verbatim; a diagnostic can never masquerade as content,
@@ -6549,7 +6568,7 @@ function cmdList(ctx, _args, flags) {
       { const h = hiddenDisclosure(); if (h) out(h); }
       return;
     }
-    printRows(rows, `list${norm.edgeAliasLabel}`, total, hint, out);
+    printRows(ctx.root, rows, `list${norm.edgeAliasLabel}`, total, hint, out);
     if (total === 0) {
       out('  ' + zeroFacetHint(db, flags));
       const d = excludedDisclosure(); if (d) out('  ' + d);
@@ -6773,14 +6792,7 @@ function cmdSearch(ctx, terms, flags) {
       } catch (e) { die(`--deep query error: ${e.message}`); }
       out(`search --deep "${raw}": ${rows.length} body hit${rows.length === 1 ? '' : 's'}${total > rows.length ? ` (total ${total}, shown ${rows.length}; narrow with more words)` : ''}`);
       rows.forEach(r => {
-        out('  ' + row(r));
-        if (r.m_body?.includes('«')) {
-          if (boundaryLiterals.length || String(r.m_body).includes(SEARCH_SEGMENT_BOUNDARY)) {
-            const body = authoredBody(r) || '';
-            const compact = body.replace(/\s+/g, ' ').trim();
-            out(`      ↳ body (authored): ${compact.length > 240 ? compact.slice(0, 237) + '…' : compact}`);
-          } else out(`      ↳ body: ${String(r.m_body).replaceAll(SEARCH_SEGMENT_BOUNDARY, '…')}`);
-        }
+        out(pointerRow(ctx.root, r));
       });
       if (!rows.length) out(`  (0 body matches under this narrower${!flags.all ? ` — --all includes ${[...EXCLUDED_SET].join('/')}` : ''})`);
       if (hiddenStatusSQL) { // context-retrieval §3 disclosure — count only, never rows
@@ -6912,50 +6924,8 @@ function cmdSearch(ctx, terms, flags) {
     const capped = total > rows.length;
     out(`search "${raw}"${scope ? ' ' + scope : ''}: ${shownSuffix(total, rows.length, capped ? `narrow with more words / --entity / or --all` : null)}${via === 'like' ? ' [substring match]' : via === 'fts+like' ? ' [includes substring matches]' : ''}`);
     rows.forEach(r => {
-      out('  ' + row(r));
-      const cleanSnippet = (s) => String(s).replaceAll(SEARCH_SEGMENT_BOUNDARY, '…');
-      const boundaryTokens = literalTokens.filter(t => t.text.includes(SEARCH_SEGMENT_BOUNDARY));
-      const whySnippet = r.m_whys?.includes('«') ? r.m_whys : r.m_nwhys?.includes('«') ? r.m_nwhys : null;
-      const profSnippet = r.m_prof?.includes('«') ? r.m_prof : r.m_nprof?.includes('«') ? r.m_nprof : null;
-      const whyNeedsSource = boundaryTokens.length || String(whySnippet || '').includes(SEARCH_SEGMENT_BOUNDARY);
-      const profNeedsSource = boundaryTokens.length || String(profSnippet || '').includes(SEARCH_SEGMENT_BOUNDARY);
-      const sourceTokens = boundaryTokens.length ? boundaryTokens : allTokens;
-      const matchesSource = value => sourceTokens.some(t => authoredTokenMatch(String(value), t));
-      if (whyNeedsSource) {
-        const why = db.prepare(`SELECT e.why FROM edges e WHERE e.from_slug=? AND e.why IS NOT NULL AND ${edgeSourceLiveSQL('e')}`).all(r.slug).map(x => x.why).find(matchesSource);
-        if (why != null) out(`      ↳ matched why (authored): ${why}`);
-      } else if (r.m_whys?.includes('«')) out(`      ↳ matched why: ${cleanSnippet(r.m_whys)}`);
-      else if (r.m_nwhys?.includes('«')) out(`      ↳ matched why (normalized): ${cleanSnippet(r.m_nwhys)}`);
-      if (profNeedsSource) {
-        let prof = null;
-        try {
-          const values = Object.values(JSON.parse(r.profile_json || '{}')).flatMap(v => Array.isArray(v) ? v : [v]);
-          prof = values.find(v => v != null && matchesSource(v)) ?? null;
-        } catch { /* malformed JSON is quarantined before search */ }
-        if (prof != null) out(`      ↳ matched profile value (authored): ${String(prof)}`);
-      } else if (r.m_prof?.includes('«')) out(`      ↳ matched profile value: ${cleanSnippet(r.m_prof)}`);
-      else if (r.m_nprof?.includes('«')) out(`      ↳ matched profile value (normalized): ${cleanSnippet(r.m_nprof)}`);
+      out(pointerRow(ctx.root, r));
     });
-    // same-display-name disambiguation (run-5: ~4.3 people/name at 50k; Haiku REFUSED
-    // rather than resolving one). Group hits sharing entity+profile.name and invite
-    // "which one?" — warnCollisions style, additive (fires only when ≥2 hits collide).
-    if (rows.length) {
-      const nameGroups = new Map();
-      for (const r of rows) {
-        let nm; try { nm = JSON.parse(r.profile_json || '{}').name; } catch { nm = null; }
-        if (!nm) continue;
-        const k = `${r.entity}\t${nm}`;
-        if (!nameGroups.has(k)) nameGroups.set(k, []);
-        nameGroups.get(k).push(r);
-      }
-      for (const [k, rs] of nameGroups) {
-        if (rs.length < 2) continue;
-        const [entity, nm] = k.split('\t');
-        out(`  ⚠ ${rs.length} ${entity}s named "${nm}" among these hits — which one? distinguish:`);
-        rs.slice(0, 8).forEach(r => out(`      ${r.slug} — ${r.description}`));
-        if (rs.length > 8) out(`      …and ${rs.length - 8} more`);
-      }
-    }
     if (!total) {
       out('  (0 results)');
       // record-status-revert change 5 (amended): a zero result under the default cohort
@@ -7003,7 +6973,7 @@ function cmdSearch(ctx, terms, flags) {
           const kept = new Set(reduced);
           const dropped = lexTokens.filter(t => !kept.has(t)).map(t => t.text);
           out(`  reduced query "${reduced.map(t => t.text).join(' ')}" (dropped: ${dropped.join(', ')}): ${shownSuffix(pass.total, Math.min(pass.rows.length, 10), null)}`);
-          pass.rows.slice(0, 10).forEach(r => out('  ' + row(r)));
+          pass.rows.slice(0, 10).forEach(r => out(pointerRow(ctx.root, r)));
           printedReduced = true;
           disclosureTokens = reduced; // F10: the printed rows came from THIS token set
         }
@@ -7490,6 +7460,8 @@ function cmdDoctor(ctx, _args, flags) {
       items.slice(0, 20).forEach(item => out(render(item)));
       if (items.length > 20) out(`  …and ${items.length - 20} more`);
     };
+    if (!flags.orphans && !flags.vacuum && !flags.merge)
+      auditIntegrations(ctx, db).forEach(line => out(line.startsWith('skill:') || line.startsWith('config:') ? `  ⚠ ${line}` : line));
     if (flags.orphans) { // dangling edges BOTH directions (missing target and missing source)
       const noTarget = db.prepare(`SELECT e.from_slug, e.verb, e.to_slug FROM edges e
         LEFT JOIN _slug_aliases ea ON ea.alias=e.to_slug
@@ -8258,6 +8230,10 @@ function cmdContexts(ctx, _args, _flags) {
 // context-retrieval §2: the CLI read also RECORDS the slug(s) as active (idempotent);
 // --drop unloads (never touches cards or edges — only the state file). Embedded reads
 // print but never carry side-state.
+// brain-teaching §1.4: --drop touches ranking state, never truth — retiring the desk
+// itself has its own path, and the drop line names it.
+const CONTEXT_DROP_NOTE = `note: drop only unloads the desk (ranking state, not truth) — to retire the desk itself: brain set <slug> --field status --to archived`;
+
 function cmdContext(ctx, args, flags) {
     const { out } = ctx.io;
     const db = requireDb(ctx);
@@ -8267,6 +8243,7 @@ function cmdContext(ctx, args, flags) {
       if (flags.all) {
         withActiveLock(ctx, () => writeActiveState(ctx, []));
         out(`dropped every desk (active: 0)`);
+        out(CONTEXT_DROP_NOTE);
         return;
       }
       args.forEach(raw => assertReadSlug(raw, 'context --drop'));
@@ -8281,6 +8258,7 @@ function cmdContext(ctx, args, flags) {
         }
         writeActiveState(ctx, [...remaining]);
         out(`(active: ${remaining.size})`);
+        out(CONTEXT_DROP_NOTE);
       });
       return;
     }
@@ -8908,6 +8886,9 @@ function cmdUnlink(ctx, [slug], flags) {
     const to = resolveWriteSlug(ctx, rawTo); // A1: source truth preserves real-slug shadowing.
     const result = commitWrite(ctx, { slug, kind: 'mutate', newOp: null, ops: [{ op: 'unlink', verb, to, rawTo }], baseHash: flags['base-hash'] || null, force: !!flags.force, permits: editPermits(flags), index: 'now' });
     out(`unlinked ${slug} → ${verb}${aliasSuffix(rawVerb, verb)} → ${to}${aliasSuffix(rawTo, to)}`);
+    // brain-teaching §1.4: unlink is for edges that were WRONG — an edge that merely ended
+    // keeps its history as the past-tense verb instead of vanishing.
+    out(`note: unlink erases the edge and its why — an edge that ended keeps history via its past-tense verb: brain link ${slug} --verb <past-verb> --to ${to} --why "…"`);
     drainSignals(result);
 }
 
@@ -8950,6 +8931,9 @@ function cmdVote(ctx, [slug], flags) {
 function cmdForget(ctx, [slug], flags) {
     const { out } = ctx.io;
     if (!slug) die(`forget requires a slug`);
+    // brain-teaching §1.1/§1.3: pre-read for the teaching lines only (class + the edges
+    // about to leave with the file) — the write path below stays byte-identical.
+    const pre = readNode(ctx.root, slug);
     const result = commitWrite(ctx, { slug, kind: 'forget', newOp: null, ops: [], baseHash: null, force: !!flags.force, permits: new Set(), index: 'now' });
     // C-7: the printed recovery recipe names the EXACT archive file and the EXACT
     // canonical destination — after a collision the archive is date-prefixed, and a bare
@@ -8962,6 +8946,14 @@ function cmdForget(ctx, [slug], flags) {
       out(result.dest ? `forgot ${slug} → ${path.relative(ctx.root, result.dest)} (file archived; index rows pending — reconciles on next open, or run: brain sync; ${recipe})`
                : `forgot ${slug} (no file; index rows pending — reconciles on next open, or run: brain sync)`);
     }
+    // brain-teaching §1.3: forget auto-drops the node's own edges with the file — say what left.
+    const edges = pre ? edgesOf(pre.fm) : [];
+    if (edges.length)
+      out(`dropped ${edges.length} edge${edges.length === 1 ? '' : 's'} with it: ${edges.map(e => `${e.verb}:${e.to}`).join(', ')}`);
+    // brain-teaching §1.1: a card's listings honor status, so a rescinded card had a
+    // history-keeping path (records/futures have their own: the past happened / freeze).
+    if (pre && deriveClass(ctx.reg, pre.fm) === 'card')
+      out(`note: forget records no why — a rescinded order keeps its ruling as history via: brain set <slug> --field status --to dropped`);
     drainSignals(result);
 }
 
@@ -9991,6 +9983,10 @@ function cmdRegister(ctx, _args, flags) {
         if (flags['unregister-alias']) { remove.aliases.push(flags['unregister-alias']); delete ctx.reg.aliases[flags['unregister-alias']]; }
         saveRegistry(ctx, { remove });
         out(`unregistered ${[...remove.entities, ...remove.verbs, ...remove.weak, ...remove.aliases].join(', ')}`);
+        // brain-teaching §1.4: unregister erases authored truth — the reversible sibling for
+        // entities is the config disable (stops new writes, keeps the type readable).
+        if (remove.entities.length)
+          out(`note: unregister erases the type from authored truth — to stop new writes but keep existing cards classified, list it in __meta/config.json disabled_entities`);
       });
       return;
     }
@@ -10085,9 +10081,420 @@ function cmdRegister(ctx, _args, flags) {
     }
 }
 
+function workspaceRelative(workspaceRoot, target) {
+  const rel = path.relative(workspaceRoot, target);
+  if (rel === '' || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return null;
+  return rel.split(path.sep).join('/');
+}
+
+function parseSkillScalar(raw, label) {
+  const value = String(raw).trim();
+  if (!value) return '';
+  if (value.startsWith('"')) {
+    try { const parsed = JSON.parse(value); if (typeof parsed !== 'string') throw new Error('not a string'); return parsed; }
+    catch (e) { throw new BrainError(`${label} has an invalid double-quoted scalar (${e.message})`); }
+  }
+  if (value.startsWith("'")) {
+    if (!value.endsWith("'") || value.length < 2) throw new BrainError(`${label} has an unterminated single-quoted scalar`);
+    return value.slice(1, -1).replace(/''/g, "'");
+  }
+  return value;
+}
+
+function parseSkillFrontmatter(text, fileLabel) {
+  const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+  if (lines[0] !== '---') throw new BrainError(`${fileLabel}: SKILL.md must begin with YAML frontmatter`);
+  const end = lines.indexOf('---', 1);
+  if (end < 0) throw new BrainError(`${fileLabel}: SKILL.md frontmatter has no closing ---`);
+  const values = Object.create(null), seen = new Set();
+  const consumed = new Set(); // name/description lines (incl. block bodies) — everything else is extra
+  for (let i = 1; i < end; i++) {
+    const line = lines[i];
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    const m = line.match(/^([A-Za-z0-9_.-]+):(?:\s*(.*))?$/);
+    if (!m) continue; // Unknown/nested YAML remains authored truth and is ignored here.
+    const key = m[1], raw = m[2] ?? '';
+    if (key !== 'name' && key !== 'description') continue;
+    consumed.add(i);
+    if (seen.has(key)) throw new BrainError(`${fileLabel}: duplicate '${key}' key is ambiguous`);
+    seen.add(key);
+    if (/^[>|]-?$/.test(raw.trim())) {
+      const indicator = raw.trim(), block = [];
+      while (i + 1 < end && (/^\s/.test(lines[i + 1]) || lines[i + 1] === '')) {
+        const next = lines[++i];
+        consumed.add(i);
+        block.push(next === '' ? '' : next.replace(/^\s+/, ''));
+      }
+      let value = indicator.startsWith('|') ? block.join('\n') : block.join('\n').replace(/([^\n])\n(?=[^\n])/g, '$1 ');
+      if (indicator.endsWith('-')) value = value.replace(/\n+$/, '');
+      values[key] = value;
+    } else values[key] = parseSkillScalar(raw, `${fileLabel}: ${key}`);
+  }
+  for (const key of ['name', 'description'])
+    if (typeof values[key] !== 'string' || !values[key].trim()) throw new BrainError(`${fileLabel}: required '${key}' must be a non-empty scalar`);
+  const extra = [];
+  for (let i = 1; i < end; i++) if (!consumed.has(i) && lines[i].trim()) extra.push(lines[i]);
+  return { name: values.name.trim(), description: values.description.trim(), body: lines.slice(end + 1).join('\n'), extra };
+}
+
+function skillPatternRoots(ctx) {
+  const problems = [...(ctx.skillConfigProblems || [])];
+  const roots = [];
+  if (!ctx.skillDirs?.length) return { roots, problems };
+  for (const pattern of ctx.skillDirs) {
+    if (typeof pattern !== 'string' || !pattern || pattern.includes('\0') || pattern.includes('**') || /[\[\]{}]/.test(pattern) || path.isAbsolute(pattern)) {
+      problems.push(`skill_dirs entry '${String(pattern)}' is invalid (relative paths and one-segment * only)`);
+      continue;
+    }
+    const parts = pattern.split(/[\\/]+/);
+    if (parts.some(p => !p || p === '.' || p === '..' || (p.includes('*') && p !== '*'))) {
+      problems.push(`skill_dirs entry '${pattern}' is invalid (relative paths and whole-segment * only)`);
+      continue;
+    }
+    let candidates = [ctx.workspaceRoot];
+    for (const part of parts) {
+      const next = [];
+      for (const base of candidates) {
+        if (part === '*') {
+          try {
+            for (const ent of fs.readdirSync(base, { withFileTypes: true })) if (ent.isDirectory() || ent.isSymbolicLink()) next.push(path.join(base, ent.name));
+          } catch (e) { if (e.code !== 'ENOENT') problems.push(`${pattern}: cannot scan ${base} (${e.message})`); }
+        } else next.push(path.join(base, part));
+      }
+      candidates = next;
+    }
+    for (const candidate of candidates) {
+      try {
+        const real = fs.realpathSync(candidate);
+        if (workspaceRelative(ctx.workspaceRootReal, real) == null) { problems.push(`${pattern}: ${candidate} resolves outside workspace_root; skipped`); continue; }
+        if (fs.statSync(real).isDirectory()) roots.push(real);
+      } catch (e) { if (e.code !== 'ENOENT') problems.push(`${pattern}: cannot resolve ${candidate} (${e.message})`); }
+    }
+  }
+  return { roots: [...new Set(roots)].sort(), problems };
+}
+
+function discoverSkills(ctx) {
+  const { roots, problems } = skillPatternRoots(ctx);
+  const byReal = new Map();
+  const walk = (dir, ancestry = new Set()) => {
+    let realDir;
+    try { realDir = fs.realpathSync(dir); }
+    catch (e) { problems.push(`${dir}: cannot resolve (${e.message})`); return; }
+    if (workspaceRelative(ctx.workspaceRootReal, realDir) == null) { problems.push(`${dir}: symlink target is outside workspace_root; skipped`); return; }
+    if (ancestry.has(realDir)) return;
+    const nextAncestry = new Set(ancestry); nextAncestry.add(realDir);
+    let entries;
+    try { entries = fs.readdirSync(realDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); }
+    catch (e) { problems.push(`${dir}: cannot scan (${e.message})`); return; }
+    for (const ent of entries) {
+      const p = path.join(realDir, ent.name);
+      if (ent.name === 'SKILL.md' && (ent.isFile() || ent.isSymbolicLink())) {
+        try {
+          const real = fs.realpathSync(p);
+          const rel = workspaceRelative(ctx.workspaceRootReal, real);
+          if (rel == null) problems.push(`${p}: file target is outside workspace_root; skipped`);
+          else if (!byReal.has(real)) byReal.set(real, { real, rel });
+        } catch (e) { problems.push(`${p}: cannot resolve (${e.message})`); }
+      } else if (ent.isDirectory() || ent.isSymbolicLink()) walk(p, nextAncestry);
+    }
+  };
+  roots.forEach(root => walk(root));
+  const skills = [...byReal.values()].sort((a, b) => a.rel.localeCompare(b.rel));
+  for (const skill of skills) {
+    try {
+      const text = fs.readFileSync(skill.real, 'utf8');
+      // A marked file is DERIVED output — never validated, never a duplicate of its own node.
+      const marker = text.match(SKILL_MARKER_RE);
+      if (marker) { skill.marker = marker[1]; continue; }
+      Object.assign(skill, parseSkillFrontmatter(text, skill.rel));
+      skill.slug = slugify(skill.name);
+      const lint = slugLint(skill.slug);
+      if (lint) throw new BrainError(`${skill.rel}: name '${skill.name}' cannot form a valid slug (${lint})`);
+      skill.nameKey = skill.name.normalize('NFKC').toLocaleLowerCase('en-US');
+    } catch (e) { skill.error = e instanceof BrainError ? e.message : `${skill.rel}: ${e.message}`; }
+  }
+  const names = new Map();
+  for (const skill of skills.filter(s => !s.error && !s.marker)) {
+    if (!names.has(skill.nameKey)) names.set(skill.nameKey, []);
+    names.get(skill.nameKey).push(skill);
+  }
+  for (const owners of names.values()) if (owners.length > 1) {
+    const detail = owners.map(s => s.rel).join(', ');
+    owners.forEach(s => { s.duplicate = `duplicate normalized skill name '${s.name}' owned by: ${detail}`; });
+  }
+  const slugs = new Map();
+  for (const skill of skills.filter(s => !s.error && !s.duplicate)) {
+    if (!slugs.has(skill.slug)) slugs.set(skill.slug, []);
+    slugs.get(skill.slug).push(skill);
+  }
+  for (const owners of slugs.values()) if (owners.length > 1) {
+    const detail = owners.map(s => `${s.name} (${s.rel})`).join(', ');
+    owners.forEach(s => { s.duplicate = `skill names collide on slug '${s.slug}': ${detail}`; });
+  }
+  return { skills, problems };
+}
+
+// skill-materialization: the brain node IS the skill (frontmatter + full body in
+// brain/__source). Host SKILL.md files are DERIVED, like the sqlite index: sync writes one
+// per literal skill_dirs target (default .claude/skills + .agents/skills), stamped with a
+// marker line proving derivation. Glob skill_dirs entries (roles/*/skills) are adoption
+// INPUTS only. An unmarked SKILL.md in the configured surface is authored truth that has
+// not entered the brain yet — sync ADOPTS it into a full node, then materializes it back
+// with the marker. A marked file the live node set no longer expects is removed.
+const SKILL_MARKER_RE = /^<!-- materialized from brain: ([a-z0-9][a-z0-9-]*) -->$/m;
+
+function materializedSkillContent(slug, name, description, body, extra = []) {
+  const desc = String(description).split('\n').map(l => `  ${l}`).join('\n');
+  const b = String(body).replace(/^\n+/, '').replace(/\n*$/, '');
+  const extraLines = (Array.isArray(extra) ? extra : []).map(String).filter(l => l.trim());
+  return `---\nname: ${name}\ndescription: >-\n${desc}\n${extraLines.length ? extraLines.join('\n') + '\n' : ''}---\n<!-- materialized from brain: ${slug} -->\n${b ? '\n' + b + '\n' : ''}`;
+}
+
+// Literal (glob-free) skill_dirs entries are the materialization targets; they need not
+// exist yet (created on first write). Glob entries never receive writes.
+function skillTargetRoots(ctx) {
+  const targets = [];
+  for (const pattern of ctx.skillDirs || []) {
+    if (typeof pattern !== 'string' || !pattern || pattern.includes('*') || path.isAbsolute(pattern)) continue;
+    const abs = path.resolve(ctx.workspaceRoot, pattern);
+    if (workspaceRelative(ctx.workspaceRoot, abs) == null) continue;
+    targets.push(abs);
+  }
+  return [...new Set(targets)].sort();
+}
+
+function liveSkillNodes(ctx, db) {
+  const rows = db.prepare(`SELECT slug FROM nodes WHERE entity='skill' AND class='card'
+    AND IFNULL(status,'') NOT IN ('superseded','archived','dropped')`).all();
+  const nodes = [];
+  for (const r of rows) {
+    const node = readNode(ctx.root, r.slug);
+    if (node) nodes.push({ slug: r.slug, node });
+  }
+  return nodes.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+function adoptSkillFile(ctx, db, skill, write, counts, messages) {
+  const nodeBody = skill.body.trim() ? '\n' + skill.body.replace(/^\n+/, '').replace(/\n*$/, '') + '\n' : '\n';
+  const existing = readNode(ctx.root, skill.slug);
+  if (!existing) {
+    if (!write) { counts.strays++; messages.push(`${skill.rel}: not yet adopted into the brain (run: brain sync)`); return; }
+    const fm = { entity: 'skill', description: skill.description, date_created: ctx.today(), profile: { name: skill.name, ...(skill.extra?.length ? { frontmatter: skill.extra } : {}) } };
+    withLock(nodeLockPath(ctx.root, skill.slug), () => writeNodeExclusive(ctx.root, skill.slug, fm, nodeBody, false));
+    indexNode(ctx, db, skill.slug);
+    counts.adopted++;
+    return true;
+  }
+  if (existing.fm?.entity !== 'skill') {
+    counts.collisions++;
+    messages.push(`${skill.rel}: slug '${skill.slug}' is a '${existing.fm?.entity ?? '(none)'}' node, not a skill; rename the skill or free the slug`);
+    return;
+  }
+  // v3 legacy: a bodyless projection card (profile.file, empty body) upgrades in place.
+  if (existing.fm.profile?.file != null && !existing.body.trim()) {
+    if (!write) { counts.strays++; messages.push(`${skill.rel}: legacy projection card '${skill.slug}' awaits body upgrade (run: brain sync)`); return; }
+    const fm = structuredClone(existing.fm);
+    fm.description = skill.description;
+    fm.profile = { ...(fm.profile || {}), name: skill.name, ...(skill.extra?.length ? { frontmatter: skill.extra } : {}) };
+    delete fm.profile.file;
+    withLock(nodeLockPath(ctx.root, skill.slug), () => writeNode(ctx.root, skill.slug, fm, nodeBody, { expectHash: existing.hash, today: ctx.today, lockHeld: true }));
+    indexNode(ctx, db, skill.slug);
+    counts.upgraded++;
+    return true;
+  }
+  const sameName = (existing.fm.profile?.name ?? skill.slug) === skill.name;
+  const sameExtra = JSON.stringify(existing.fm.profile?.frontmatter ?? []) === JSON.stringify(skill.extra ?? []);
+  if (existing.fm.description === skill.description && sameName && sameExtra && existing.body.trim() === skill.body.trim()) return true; // consistent — stamp it derived
+  counts.collisions++;
+  messages.push(`${skill.rel}: skill node '${skill.slug}' and this unmarked file disagree — the brain is truth; update the node (brain get ${skill.slug}) or remove the file`);
+}
+
+function materializeSkills(ctx, db, target = null, write = true) {
+  const counts = { nodes: 0, adopted: 0, upgraded: 0, written: 0, unchanged: 0, removed: 0, stale: 0, strays: 0, collisions: 0, invalid: 0 };
+  const discovery = discoverSkills(ctx);
+  if (discovery.problems.length && write) throw new BrainError(`skill configuration is invalid: ${discovery.problems.join(' | ')}`);
+  const messages = [...discovery.problems];
+  if (target != null) { // --skill validates the target, then the full idempotent pass runs
+    const t = String(target);
+    const asNode = !t.includes('/') && !t.endsWith('.md') && readNode(ctx.root, t);
+    let asFile = false;
+    if (!asNode && path.basename(t) === 'SKILL.md') {
+      // A deleted derived file is a valid target: the pass rewrites or forgets it.
+      const resolved = path.resolve(ctx.workspaceRoot, t);
+      let lexical = resolved;
+      try { lexical = path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved)); } catch { /* keep lexical */ }
+      asFile = discovery.skills.some(s => s.real === lexical || s.rel === workspaceRelative(ctx.workspaceRootReal, lexical))
+        || skillPatternRoots(ctx).roots.some(root => workspaceRelative(root, lexical) != null)
+        || skillTargetRoots(ctx).some(root => workspaceRelative(root, resolved) != null);
+    }
+    if (!(asNode && asNode.fm?.entity === 'skill') && !asFile)
+      throw new BrainError(`sync --skill '${target}' is neither a skill node slug nor a configured SKILL.md`);
+  }
+  const marked = new Map(); // real path -> derived-from slug
+  for (const skill of discovery.skills) {
+    if (skill.marker) { marked.set(skill.real, skill.marker); continue; }
+    if (skill.error) { counts.invalid++; messages.push(skill.error); continue; }
+    if (skill.duplicate) { counts.collisions++; messages.push(skill.duplicate); continue; }
+    const adopted = adoptSkillFile(ctx, db, skill, write, counts, messages);
+    // Stamp the adopted source with the marker: it is derived now, so a later pass may
+    // rewrite it in place (target dirs) or remove it as an orphan (migration inputs).
+    if (adopted && write) {
+      atomicWrite(skill.real, materializedSkillContent(skill.slug, skill.name, skill.description, skill.body, skill.extra));
+      marked.set(skill.real, skill.slug);
+    }
+  }
+  const live = liveSkillNodes(ctx, db);
+  counts.nodes = live.length;
+  const targets = skillTargetRoots(ctx);
+  if (!targets.length && live.length) messages.push(`no literal skill_dirs target to materialize into — add e.g. ".claude/skills" to skill_dirs`);
+  const expected = new Map(); // absolute file path -> content
+  for (const { slug, node } of live) {
+    const name = typeof node.fm.profile?.name === 'string' && node.fm.profile.name.trim() ? node.fm.profile.name.trim() : slug;
+    for (const root of targets)
+      expected.set(path.join(root, slug, 'SKILL.md'), materializedSkillContent(slug, name, node.fm.description ?? '', node.body, node.fm.profile?.frontmatter));
+  }
+  for (const [file, content] of expected) {
+    let current = null;
+    try { current = fs.readFileSync(file, 'utf8'); } catch { /* absent */ }
+    if (current === content) { counts.unchanged++; continue; }
+    if (!write) { counts.stale++; messages.push(`${workspaceRelative(ctx.workspaceRootReal, file) ?? file}: missing or stale (run: brain sync)`); continue; }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    atomicWrite(file, content);
+    counts.written++;
+  }
+  const expectedReal = new Set([...expected.keys()].map(p => { try { return fs.realpathSync(p); } catch { return p; } }));
+  for (const [real, fromSlug] of marked) {
+    if (expectedReal.has(real)) continue;
+    if (!write) { counts.stale++; messages.push(`${workspaceRelative(ctx.workspaceRootReal, real) ?? real}: orphaned (derived from '${fromSlug}', no longer expected)`); continue; }
+    try { fs.unlinkSync(real); fs.rmdirSync(path.dirname(real)); } catch { /* dir not empty / already gone */ }
+    counts.removed++;
+  }
+  return { counts, messages };
+}
+
+function skillSummary(result) {
+  const c = result.counts;
+  return `skills: ${c.nodes} nodes, ${c.adopted} adopted, ${c.upgraded} upgraded, ${c.written} files written, ${c.removed} removed, ${c.unchanged} unchanged, ${c.collisions} collisions, ${c.invalid} invalid`;
+}
+
+function hookCommandGroups(doc, eventName) {
+  const groups = doc?.hooks?.[eventName];
+  return Array.isArray(groups) ? groups : [];
+}
+
+function auditIntegrations(ctx, db) {
+  const lines = [];
+  if (ctx.integrationConfigProblems?.length) lines.push(...ctx.integrationConfigProblems.map(p => `config: ${p}`));
+  if (ctx.skillDirs?.length) {
+    const result = materializeSkills(ctx, db, null, false);
+    const unhealthy = result.counts.invalid + result.counts.collisions + result.counts.stale + result.counts.strays + result.messages.length;
+    lines.push(`skill materialization: ${unhealthy ? 'DRIFT' : 'ok'} — ${skillSummary(result)}, ${result.counts.stale} missing/stale/orphaned, ${result.counts.strays} unadopted, ${result.messages.length} issue${result.messages.length === 1 ? '' : 's'}`);
+    result.messages.forEach(m => lines.push(`skill: ${m}`));
+  }
+  if (ctx.hookHosts) {
+    const allowed = new Set(['claude_code', 'codex', 'pi']);
+    for (const key of Object.keys(ctx.hookHosts)) if (!allowed.has(key)) lines.push(`hooks: unknown host '${key}'`);
+    for (const [key, host] of [['claude_code', 'claude-code'], ['codex', 'codex']]) {
+      if (!Object.prototype.hasOwnProperty.call(ctx.hookHosts, key)) continue;
+      const rel = ctx.hookHosts[key];
+      if (typeof rel !== 'string' || !rel || path.isAbsolute(rel)) { lines.push(`hooks: BROKEN ${host} — config path must be relative to workspace_root`); continue; }
+      const configPath = path.resolve(ctx.workspaceRoot, rel);
+      if (workspaceRelative(ctx.workspaceRoot, configPath) == null) { lines.push(`hooks: BROKEN ${host} — config path escapes workspace_root`); continue; }
+      let doc;
+      try { doc = JSON.parse(fs.readFileSync(configPath, 'utf8')); }
+      catch (e) { lines.push(`hooks: BROKEN ${host} — cannot parse ${rel} (${e.message})`); continue; }
+      const failures = [];
+      if (host === 'claude-code' && doc.disableAllHooks === true) failures.push(`disableAllHooks is true`);
+      const expandCommand = command => command.replaceAll('$CLAUDE_PROJECT_DIR', ctx.workspaceRoot)
+        .replaceAll('$(git rev-parse --show-toplevel)', ctx.workspaceRoot);
+      const commandRoot = command => {
+        const match = expandCommand(command).match(/\bBRAIN_ROOT=(?:"([^"]+)"|'([^']+)'|(\S+))/);
+        return match && (match[1] || match[2] || match[3]);
+      };
+      const targetsThisStore = command => {
+        const wiredRoot = commandRoot(command);
+        return wiredRoot && path.resolve(wiredRoot) === path.resolve(ctx.root);
+      };
+      for (const eventName of ['PreToolUse', 'PostToolUse']) {
+        const ok = hookCommandGroups(doc, eventName).some(group => group?.matcher === 'Edit|Write' && Array.isArray(group.hooks)
+          && group.hooks.some(h => h?.type === 'command' && typeof h.command === 'string'
+            && h.command.includes('brain-sync.mjs') && h.command.includes(`--host ${host}`) && targetsThisStore(h.command)));
+        if (!ok) failures.push(`${eventName} Edit|Write is missing the ${host} brain-sync.mjs command`);
+      }
+      const sessionOk = hookCommandGroups(doc, 'SessionStart').some(group => Array.isArray(group.hooks)
+        && group.hooks.some(h => h?.type === 'command' && typeof h.command === 'string'
+          && h.command.includes('brain-session-start.mjs') && h.command.includes(`--host ${host}`) && targetsThisStore(h.command)));
+      if (!sessionOk) failures.push(`SessionStart is missing the ${host} brain-session-start.mjs command`);
+      const commands = ['PreToolUse', 'PostToolUse', 'SessionStart'].flatMap(eventName => hookCommandGroups(doc, eventName))
+        .flatMap(group => Array.isArray(group.hooks) ? group.hooks : []).map(h => h?.command)
+        .filter(c => typeof c === 'string' && c.includes(`--host ${host}`) && targetsThisStore(c));
+      for (const command of commands.filter(c => c.includes('brain-sync.mjs') || c.includes('brain-session-start.mjs'))) {
+        const expanded = expandCommand(command);
+        const match = expanded.match(/["']([^"']+\/(?:brain-sync|brain-session-start)\.mjs)["']/);
+        if (match && !fs.existsSync(match[1])) failures.push(`referenced hook script does not exist: ${match[1]}`);
+        if (match) {
+          const siblingEngine = path.resolve(path.dirname(match[1]), '..', 'brain.mjs');
+          if (!fs.existsSync(siblingEngine)) failures.push(`hook sibling brain.mjs does not exist: ${siblingEngine}`);
+        }
+      }
+      if (host === 'codex') {
+        const toml = path.join(ctx.workspaceRoot, '.codex', 'config.toml');
+        if (fs.existsSync(toml)) {
+          try {
+            const text = fs.readFileSync(toml, 'utf8');
+            let section = '', disabled = false;
+            for (const line of text.split(/\r?\n/)) {
+              const header = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
+              if (header) { section = header[1]; continue; }
+              if (/^\s*hooks_enabled\s*=\s*false\s*(?:#.*)?$/.test(line)
+                || (section === 'hooks' && /^\s*enabled\s*=\s*false\s*(?:#.*)?$/.test(line))) disabled = true;
+            }
+            if (disabled) failures.push(`project config explicitly disables hooks`);
+          } catch { /* config JSON diagnosis is still useful */ }
+        }
+      }
+      const uniqueFailures = [...new Set(failures)];
+      lines.push(`hooks: ${uniqueFailures.length ? 'BROKEN' : 'ok'} ${host}${uniqueFailures.length ? ` — ${uniqueFailures.join(' | ')}` : ''}`);
+      if (host === 'codex' && !uniqueFailures.length) lines.push(`hooks: codex trust is runtime state — verify these project hooks with /hooks`);
+    }
+    // pi has no hook-settings envelope: the kit ships .pi/extensions/*.ts instead.
+    // The audit is file-based — the canonical pair must exist in the configured
+    // extensions dir and each file's STORE_ROOT/ENGINE constants must resolve to
+    // a real engine under the workspace.
+    if (Object.prototype.hasOwnProperty.call(ctx.hookHosts, 'pi')) {
+      const rel = ctx.hookHosts.pi;
+      if (typeof rel !== 'string' || !rel || path.isAbsolute(rel)) lines.push(`hooks: BROKEN pi — config path must be relative to workspace_root`);
+      else {
+        const dir = path.resolve(ctx.workspaceRoot, rel);
+        if (workspaceRelative(ctx.workspaceRoot, dir) == null) lines.push(`hooks: BROKEN pi — config path escapes workspace_root`);
+        else {
+          const failures = [];
+          for (const name of ['brain-sync.ts', 'brain-session-start.ts']) {
+            const file = path.join(dir, name);
+            if (!fs.existsSync(file)) { failures.push(`missing ${rel}/${name}`); continue; }
+            let text; try { text = fs.readFileSync(file, 'utf8'); } catch (e) { failures.push(`cannot read ${rel}/${name} (${e.message})`); continue; }
+            const store = text.match(/\bSTORE_ROOT\s*=\s*["']([^"']+)["']/);
+            const eng = text.match(/\bENGINE\s*=\s*["']([^"']+)["']/);
+            if (!store || !eng) { failures.push(`${rel}/${name} carries no STORE_ROOT/ENGINE constants to audit`); continue; }
+            const enginePath = path.resolve(ctx.workspaceRoot, store[1], eng[1]);
+            if (workspaceRelative(ctx.workspaceRoot, enginePath) == null) failures.push(`${rel}/${name} STORE_ROOT/ENGINE escapes workspace_root`);
+            else if (!fs.existsSync(enginePath)) failures.push(`${rel}/${name} references missing engine at ${store[1]}/${eng[1]}`);
+          }
+          const uniqueFailures = [...new Set(failures)];
+          lines.push(`hooks: ${uniqueFailures.length ? 'BROKEN' : 'ok'} pi${uniqueFailures.length ? ` — ${uniqueFailures.join(' | ')}` : ''}`);
+          if (!uniqueFailures.length) lines.push(`hooks: pi project extensions load only in trusted projects — trust is runtime state`);
+        }
+      }
+    }
+  }
+  return lines;
+}
+
 function cmdSync(ctx, _args, flags) {
     const { out } = ctx.io; const { root } = ctx;
-    assertExclusiveModes('sync', flags, ['slug', 'deep']);
+    assertExclusiveModes('sync', flags, ['slug', 'skill']);
+    if (flags.deep && (flags.slug != null || flags.skill != null)) die(`sync --deep cannot combine with --slug or --skill`);
     // reconcile item 7: loadRegistry's corrupt-registry warning claims "reindex/sync
     // REFUSE" — make sync honor it. Reindexing rows against the seed-fallback would
     // misclassify custom-entity nodes just as a full rebuild would.
@@ -10125,6 +10532,14 @@ function cmdSync(ctx, _args, flags) {
       db.prepare(`INSERT INTO errors VALUES(?,?)`).run(p, `index failure: ${e.message} — file quarantined (brain doctor)`);
       counts.quarantined++;
     };
+    if (flags.skill) {
+      migrateRegistryIfStale(ctx);
+      const result = materializeSkills(ctx, db, flags.skill, true);
+      result.messages.forEach(m => out(`  ⚠ ${m}`));
+      out(skillSummary(result));
+      if (result.counts.collisions || result.counts.invalid) process.exitCode = 1;
+      return;
+    }
     if (flags.slug) {
       const p = nodePath(root, flags.slug);
       const s = db.prepare(`SELECT content_hash, path FROM nodes WHERE slug=?`).get(flags.slug);
@@ -10156,6 +10571,15 @@ function cmdSync(ctx, _args, flags) {
         else if (s.path !== p) { db.prepare(`UPDATE nodes SET path=? WHERE slug=?`).run(p, flags.slug); action = 'touched'; }
       }
       out(`sync ${flags.slug}: ${action}${indexResultSuffix(result)}`); // bug #84
+      // A skill node write must land on the hosts in the same act — targeted sync is the
+      // hook's per-write path, so re-materialize here (a removed skill's orphaned host
+      // files fall to the next full sync/session start).
+      const entity = db.prepare(`SELECT entity FROM nodes WHERE slug=?`).get(flags.slug)?.entity;
+      if (entity === 'skill' && ctx.skillDirs?.length) {
+        const skillResult = materializeSkills(ctx, db, null, true);
+        skillResult.messages.forEach(m => out(`  ⚠ ${m}`));
+        if (skillResult.counts.written || skillResult.counts.removed || skillResult.counts.adopted) out(skillSummary(skillResult));
+      }
       return;
     }
     // Full sync has no later refusal-only precondition: the sweep below is its commit
@@ -10231,6 +10655,10 @@ function cmdSync(ctx, _args, flags) {
     if (badFilenameSignals.length)
       console.error(`⚠ ${badFilenameSignals.length} filename(s) fail slug rules: ${badFilenameSignals.slice(0, 5).join(' | ')}${badFilenameSignals.length > 5 ? ' | …' : ''}`);
     out(`sync${flags.deep ? ' --deep' : ''}: ${files.length} files in ${(performance.now() - t0).toFixed(0)}ms — ${added} added, ${updated} updated, ${removed} removed, ${touched} touched, ${unchanged} unchanged${gone ? `, ${gone} vanished mid-sweep` : ''}${demoted ? `, ${demoted} demoted to body-only — run doctor` : ''}${quarantined ? `, ${quarantined} quarantined (bad slug / index failure) — run doctor` : ''}${flags.deep ? ' (hash-verified every file)' : ' (stat fast-path)'}`);
+    const skillResult = materializeSkills(ctx, db, null, true);
+    skillResult.messages.forEach(m => out(`  ⚠ ${m}`));
+    out(skillSummary(skillResult));
+    if (skillResult.counts.collisions || skillResult.counts.invalid) process.exitCode = 1;
     });
 }
 
@@ -10266,10 +10694,10 @@ function cmdBatch(ctx, _args, _flags, deps) {
 const VERBS = Object.assign(Object.create(null), {
   reindex: { impl: cmdReindex, kind: 'write', flags: {}, desc: 'rebuild the whole index from brain/__source/', help: `reindex — rebuild the index from brain/__source/ (single-flight; safe under a live reader).\n  usage: brain reindex` },
   now: { impl: cmdNow, kind: 'read', applyRead: true, flags: {}, desc: 'print the owner-local date + time stamp (zero-DB)', help: `now — print the owner-local date + time stamp for grounding before a date-bearing write.\n  usage: brain now` },
-  get: { impl: cmdGet, kind: 'read', applyRead: true, flags: { field: 'str', body: 'bool', raw: 'bool' }, desc: 'print full node(s) (or one --field / --raw source)', help: `get — print node(s). Bodyless node → whole file; with a body → frontmatter +\n  size hint, --body opts into the prose.\n  usage: brain get <slug> [<slug>...] [--field <path>] [--body] [--raw]\n  --field profile.name   one field only (bare value for one slug; slug<TAB>value for many)\n  --raw                  the exact source bytes only — no hash line, no diagnostics (machine channel)\n  e.g. brain get <slug>  ·  brain get <slug> --body  ·  brain get <slug> <slug2> --field due` },
+  get: { impl: cmdGet, kind: 'read', applyRead: true, flags: { field: 'str', body: 'bool', raw: 'bool' }, desc: 'return a source Markdown pointer (or explicit field/body/raw)', help: `get — return an absolute Markdown pointer for the host file tool.\n  usage: brain get <slug> [<slug>...] [--field <path>] [--body] [--raw]\n  default row: slug<TAB>entity<TAB>absolute-md-path<TAB>Read this file with your file tool.\n  --body                 explicitly render the source plus its CAS hash line\n  --field profile.name   one field only (bare value for one slug; slug<TAB>value for many)\n  --raw                  exact source bytes only — no diagnostics (machine channel)` },
   peek: { impl: cmdPeek, kind: 'read', applyRead: true, flags: {}, desc: 'one-line summary + profile + workability', help: `peek — one-line summary + profile + (for futures) workability.\n  usage: brain peek <slug>\n  e.g. brain peek <slug>` },
   list: { impl: cmdList, kind: 'read', applyRead: true, flags: COHORT_VERB_FLAGS, desc: 'cohort query: filter/project/count nodes', help: `list — cohort query over nodes (filter, project, count).\n  usage: brain list [filters] [--fields a,b] [--count] [--limit N] [--all]\n  filters: --entity E --class C --status S --important --occurred-from/-to D --due-from/-to D\n           --created-from/-to D --profile key=value --edge verb[:target]   (unknown filter = error)\n  --fields slug,description,occurred,due,status,profile.<k>,rel.<verb>   projection (TSV)\n  --count  print just the number\n  e.g. brain list --entity conversation --occurred-from 2026-06-01 --fields slug,rel.was_with` },
-  search: { impl: cmdSearch, kind: 'read', applyRead: true, flags: { entity: 'str', class: 'str', for: 'str', within: 'str', from: 'str', to: 'str', all: 'bool', deep: 'bool' }, desc: 'full-text hunt (descriptions, edge whys, profile values)', help: `search — full-text over descriptions, edge whys, profile values.\n  usage: brain search "<terms>" [--entity E] [--class C] [--for <slug>] [--from/--to D] [--all] [--deep]\n  caps at 60 hits; narrowers filter the hit set; same-name hits are grouped with a "which one?" prompt; "" is an error\n  --entity/--class/--for <slug>/--within <slug>/--from/--to   narrow the results (also REQUIRED by --deep)\n  --deep  search node BODIES (separate index); needs one of the narrowers above or --all\n  e.g. brain search "vintage tractors" --entity company  ·  brain search "exclusivity" --deep --for jimbob-caramel-partnership` },
+  search: { impl: cmdSearch, kind: 'read', applyRead: true, flags: { entity: 'str', class: 'str', for: 'str', within: 'str', from: 'str', to: 'str', all: 'bool', deep: 'bool' }, desc: 'search the derived index and return Markdown pointers', help: `search — select Markdown files by descriptions, edge whys, and profile values.\n  usage: brain search "<terms>" [--entity E] [--class C] [--for <slug>] [--from/--to D] [--all] [--deep]\n  results are absolute Markdown pointers; read selected files with the host file tool.\n  --entity/--class/--for <slug>/--within <slug>/--from/--to   narrow results (also REQUIRED by --deep)\n  --deep  search node bodies but still return pointers; needs a narrower or --all` },
   relations: { impl: cmdRelations, kind: 'read', applyRead: true, flags: { verb: 'str', depth: 'int' }, desc: 'edges + whys + updated stack + latest record for a slug', help: `relations — edges (both directions) + whys + updated stack + latest record.\n  usage: brain relations <slug> [--verb <verb>] [--depth 1-3]\n  --verb   filter to one verb (lists every matching edge; the above-50 hub collapse applies only without --verb)\n  --depth  opt-in multi-hop (bounded narrow walk), appended after the depth-1 body\n  slug + verb aliases resolve at query time.\n  e.g. brain relations <slug>  ·  brain relations <slug> --verb was_with  ·  brain relations <slug> --depth 2` },
   futures: { impl: cmdFutures, kind: 'read', applyRead: true, flags: { for: 'str', window: 'str', all: 'bool' }, desc: 'the cockpit: open futures, blocked last', help: `futures — the cockpit: open futures, workable first, blocked last.\n  usage: brain futures [--for <slug>] [--window day|week|month|year] [--all]\n  e.g. brain futures --for <slug>  ·  brain futures --window week` },
   outbox: { impl: cmdOutbox, kind: 'read', applyRead: true, flags: {}, desc: 'passed-but-unprocessed futures', help: `outbox — futures whose due date passed but were never processed.\n  usage: brain outbox` },
@@ -10302,7 +10730,7 @@ const VERBS = Object.assign(Object.create(null), {
   contexts: { impl: cmdContexts, kind: 'read', applyRead: true, flags: {},
     desc: 'the roster of contexts (worlds of relevance; ● marks active)',
     help: `contexts — every context card: slug — name: mission, with active desks marked ●. The\n  session-start read; load one or more with brain context <slug> [<slug>…].\n  usage: brain contexts` },
-  sync: { impl: cmdSync, kind: 'write', flags: { slug: 'str', deep: 'bool' }, desc: 'reconcile the index with hand-edited files', help: `sync — reconcile the index with hand-edited md files (mark-and-sweep).\n  usage: brain sync [--slug <slug>] [--deep]\n  stat fast-path (mtime+size) then content_hash; adds/updates/removes as needed.\n  --deep   hash-verify EVERY file (no fast path) — after bulk external ops / restores.\n  chunked transactions (won't starve concurrent writers); the endorsed hand-edit path.` },
+  sync: { impl: cmdSync, kind: 'write', flags: { slug: 'str', skill: 'str', deep: 'bool' }, desc: 'reconcile hand-edited nodes and materialize skills', help: `sync — reconcile hand-edited md files and materialize skill nodes to host SKILL.md files.\n  usage: brain sync [--slug <slug> | --skill <slug-or-path>] [--deep]\n  --skill  validate the target (skill node slug or configured SKILL.md path), then run the\n           full skill pass: adopt unmarked SKILL.md files into full nodes, write every live\n           skill node to each literal skill_dirs target, remove orphaned derived files.\n  --deep   hash-verify EVERY node file (no fast path); cannot combine with a selector.\n  full sync reconciles node files first, then runs the same skill pass.` },
   count: { impl: cmdCount, kind: 'read', applyRead: true, flags: COUNT_VERB_FLAGS, desc: 'class breakdown, or a filtered cohort count', help: `count — class breakdown (bare, spans every status), or a filtered cohort count.\n  usage: brain count [filters] [--all]\n  filters: --entity E --class C --status S --important --occurred-from/-to D --due-from/-to D --created-from/-to D --profile key=value --edge verb[:target]\n  --all   with filters: include the archive (status archived — the only default-hidden status)\n  count prints numbers only — list's --fields/--count/--limit are list flags, rejected here.` },
   batch: { impl: (ctx, a, f) => cmdBatch(ctx, a, f, { runRead: embeddedRead }), kind: 'read', neverEmbedded: true, flags: {}, desc: 'run many read ops in one process (NDJSON stdin)', help: `batch — run many embedded read ops in ONE process (NDJSON stdin).\n  shared read set: get, peek, list, search, relations, futures, outbox, check, files, tools, skills, context, contexts, count, now.\n  usage: echo '{"id":1,"verb":"get","args":["<slug>"]}' | brain batch\n  each op: {"id":..,"verb":"..","args":[..],"flags":{..}} → {"id":..,"ok":..,"output"|"error":..}` },
 });
@@ -10620,6 +11048,11 @@ function openBrain(root) {
   let votesEnabled = true;
   let whoCreated = true;
   let group = false;
+  let workspaceRoot = root;
+  let skillDirs = [];
+  let hookHosts = null;
+  const integrationConfigProblems = [];
+  const skillConfigProblems = [];
   if (fs.existsSync(p)) {
     let c;
     try { c = JSON.parse(fs.readFileSync(p, 'utf8')); }
@@ -10638,10 +11071,27 @@ function openBrain(root) {
     if (c && c.votes === false) votesEnabled = false;
     if (c && c.who_created === false) whoCreated = false;
     if (c && c.group === true) group = true;
+    if (c && Object.prototype.hasOwnProperty.call(c, 'workspace_root')) {
+      if (typeof c.workspace_root !== 'string' || !c.workspace_root || c.workspace_root.includes('\0'))
+        { integrationConfigProblems.push(`workspace_root must be a non-empty string path; using BRAIN_ROOT`); skillConfigProblems.push(`workspace_root is malformed`); }
+      else workspaceRoot = path.resolve(root, c.workspace_root);
+    }
+    if (c && Object.prototype.hasOwnProperty.call(c, 'skill_dirs')) {
+      if (!Array.isArray(c.skill_dirs)) { integrationConfigProblems.push(`skill_dirs must be an array; skill projection is disabled`); skillConfigProblems.push(`skill_dirs must be an array`); }
+      else skillDirs = c.skill_dirs;
+    }
+    if (c && Object.prototype.hasOwnProperty.call(c, 'hook_hosts')) {
+      if (!c.hook_hosts || typeof c.hook_hosts !== 'object' || Array.isArray(c.hook_hosts))
+        integrationConfigProblems.push(`hook_hosts must be an object; host diagnostics are disabled`);
+      else hookHosts = c.hook_hosts;
+    }
     // ontology-cleanup §8: the standing lock. Only a real boolean true locks — a malformed
     // or absent config leaves the store unlocked (and doctor says so, loudly).
     if (c && Object.prototype.hasOwnProperty.call(c, 'schema_lock') && c.schema_lock === true) schemaLock = true;
   }
+  let workspaceRootReal = workspaceRoot;
+  try { workspaceRootReal = fs.realpathSync(workspaceRoot); }
+  catch (e) { if (e.code !== 'ENOENT') integrationConfigProblems.push(`workspace_root cannot be resolved (${e.message})`); }
   const ctx = {
     root,
     reg: loaded.reg,
@@ -10656,6 +11106,12 @@ function openBrain(root) {
     votesEnabled,
     whoCreated,
     group,
+    workspaceRoot,
+    workspaceRootReal,
+    skillDirs,
+    hookHosts,
+    integrationConfigProblems,
+    skillConfigProblems,
     // The name source is env, not config: a GROUP store has many writers — one store,
     // one config, many BRAIN_WHOs. Unset ⇒ no stamp, silently (§6 ruling).
     who: process.env.BRAIN_WHO != null && process.env.BRAIN_WHO !== '' ? String(process.env.BRAIN_WHO) : null,

@@ -1,7 +1,19 @@
 {
   "schema_lock": true,
   "timezone": "Europe/Lisbon",
-  "disabled_entities": ["memory", "lesson", "working-memory"],
+  "disabled_entities": [
+    "memory",
+    "lesson",
+    "working-memory"
+  ],
   "votes": false,
-  "who_created": false
+  "who_created": false,
+  "skill_dirs": [
+    ".claude/skills",
+    ".agents/skills"
+  ],
+  "workspace_root": ".",
+  "hook_hosts": {
+    "claude_code": ".claude/settings.json"
+  }
 }
